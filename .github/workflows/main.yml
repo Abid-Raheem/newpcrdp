@@ -135,8 +135,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ubuntu-desktop-minimal xfce4 xfce4-goodies tightvncserver
-          sudo apt-get install -y openssh-server
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            xfce4 xfce4-goodies tightvncserver openssh-server \
+            firefox nano curl wget git
 
       - name: Configure VNC Server (Linux)
         if: runner.os == 'Linux'
@@ -153,13 +154,23 @@ jobs:
           # Create VNC startup script
           cat > ~/.vnc/xstartup << 'EOF'
           #!/bin/bash
-          xrdb $HOME/.Xresources
+          unset SESSION_MANAGER
+          unset DBUS_SESSION_BUS_ADDRESS
+          export XKL_XMODMAP_DISABLE=1
+          xrdb $HOME/.Xresources 2>/dev/null || true
           startxfce4 &
           EOF
           chmod +x ~/.vnc/xstartup
           
           # Start VNC server
           vncserver :1 -geometry 1920x1080 -depth 24
+          
+          # Verify VNC is running
+          sleep 3
+          if ! pgrep -f "Xvnc :1" > /dev/null; then
+              echo "VNC server failed to start properly"
+              exit 1
+          fi
 
       - name: Configure SSH (Linux)
         if: runner.os == 'Linux'
