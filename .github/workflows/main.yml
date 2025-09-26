@@ -1,29 +1,15 @@
-name: Remote Access
+name: RDP
 
 on:
   workflow_dispatch:
-    inputs:
-      os:
-        description: 'Operating System'
-        required: false
-        default: 'both'
-        type: choice
-        options:
-        - windows
-        - linux
-        - both
 
 jobs:
-  remote-access:
-    strategy:
-      matrix:
-        os: ${{ github.event.inputs.os == 'windows' && fromJSON('["windows-latest"]') || github.event.inputs.os == 'linux' && fromJSON('["ubuntu-latest"]') || fromJSON('["windows-latest", "ubuntu-latest"]') }}
-    runs-on: ${{ matrix.os }}
+  secure-rdp:
+    runs-on: windows-2019
     timeout-minutes: 3600
 
     steps:
-      - name: Configure Core RDP Settings (Windows)
-        if: runner.os == 'Windows'
+      - name: Configure Core RDP Settings
         run: |
           # Enable Remote Desktop and disable Network Level Authentication (if needed)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
@@ -43,8 +29,7 @@ jobs:
           # (Optional) Restart the Remote Desktop service to ensure changes take effect
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Secure Password (Windows)
-        if: runner.os == 'Windows'
+      - name: Create RDP User with Secure Password
         run: |
           Add-Type -AssemblyName System.Security
           $charSet = @{
@@ -72,8 +57,7 @@ jobs:
               exit 1
           }
 
-      - name: Install Tailscale (Windows)
-        if: runner.os == 'Windows'
+      - name: Install Tailscale
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
           $installerPath = "$env:TEMP\tailscale.msi"
@@ -82,8 +66,7 @@ jobs:
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
 
-      - name: Establish Tailscale Connection (Windows)
-        if: runner.os == 'Windows'
+      - name: Establish Tailscale Connection
         run: |
           # Bring up Tailscale with the provided auth key and set a unique hostname
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
@@ -103,8 +86,7 @@ jobs:
           }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
       
-      - name: Verify RDP Accessibility (Windows)
-        if: runner.os == 'Windows'
+      - name: Verify RDP Accessibility
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           
@@ -116,8 +98,7 @@ jobs:
           }
           Write-Host "TCP connectivity successful!"
 
-      - name: Maintain Connection (Windows)
-        if: runner.os == 'Windows'
+      - name: Maintain Connection
         run: |
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
@@ -130,128 +111,3 @@ jobs:
               Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
               Start-Sleep -Seconds 300
           }
-
-      - name: Install VNC Server and Desktop Environment (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            xfce4 xfce4-goodies tightvncserver openssh-server \
-            firefox nano curl wget git
-
-      - name: Configure VNC Server (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          # Generate a secure password for VNC
-          VNC_PASSWORD=$(openssl rand -base64 12 | tr -d "=+/" | cut -c1-8)
-          echo "VNC_PASSWORD=${VNC_PASSWORD}" >> $GITHUB_ENV
-          
-          # Set up VNC password
-          mkdir -p ~/.vnc
-          echo "${VNC_PASSWORD}" | vncpasswd -f > ~/.vnc/passwd
-          chmod 600 ~/.vnc/passwd
-          
-          # Create VNC startup script
-          cat > ~/.vnc/xstartup << 'EOF'
-          #!/bin/bash
-          unset SESSION_MANAGER
-          unset DBUS_SESSION_BUS_ADDRESS
-          export XKL_XMODMAP_DISABLE=1
-          xrdb $HOME/.Xresources 2>/dev/null || true
-          startxfce4 &
-          EOF
-          chmod +x ~/.vnc/xstartup
-          
-          # Start VNC server
-          vncserver :1 -geometry 1920x1080 -depth 24
-          
-          # Verify VNC is running
-          sleep 3
-          if ! pgrep -f "Xvnc :1" > /dev/null; then
-              echo "VNC server failed to start properly"
-              exit 1
-          fi
-
-      - name: Configure SSH (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          # Generate a secure password for SSH user
-          SSH_PASSWORD=$(openssl rand -base64 16 | tr -d "=+/" | cut -c1-12)
-          echo "SSH_PASSWORD=${SSH_PASSWORD}" >> $GITHUB_ENV
-          
-          # Create user for remote access
-          sudo useradd -m -s /bin/bash remoteuser
-          echo "remoteuser:${SSH_PASSWORD}" | sudo chpasswd
-          sudo usermod -aG sudo remoteuser
-          
-          # Configure SSH
-          sudo systemctl enable ssh
-          sudo systemctl start ssh
-          
-          # Allow password authentication
-          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
-          sudo systemctl restart ssh
-
-      - name: Install Tailscale (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          curl -fsSL https://tailscale.com/install.sh | sh
-
-      - name: Establish Tailscale Connection (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          # Bring up Tailscale with the provided auth key and set a unique hostname
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-linux-$GITHUB_RUN_ID
-          
-          # Wait for Tailscale to assign an IP
-          TAILSCALE_IP=""
-          for i in {1..10}; do
-              TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
-              if [[ -n "$TAILSCALE_IP" ]]; then
-                  break
-              fi
-              sleep 5
-          done
-          
-          if [[ -z "$TAILSCALE_IP" ]]; then
-              echo "Tailscale IP not assigned. Exiting."
-              exit 1
-          fi
-          echo "TAILSCALE_IP=${TAILSCALE_IP}" >> $GITHUB_ENV
-
-      - name: Verify Remote Access (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          echo "Tailscale IP: $TAILSCALE_IP"
-          
-          # Test SSH connectivity
-          timeout 10 bash -c "echo > /dev/tcp/$TAILSCALE_IP/22" && echo "SSH (port 22) is accessible" || echo "SSH port test failed"
-          
-          # Test VNC connectivity
-          timeout 10 bash -c "echo > /dev/tcp/$TAILSCALE_IP/5901" && echo "VNC (port 5901) is accessible" || echo "VNC port test failed"
-
-      - name: Maintain Connection (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          echo ""
-          echo "=== LINUX REMOTE ACCESS ==="
-          echo "Tailscale IP: $TAILSCALE_IP"
-          echo ""
-          echo "SSH Access:"
-          echo "  ssh remoteuser@$TAILSCALE_IP"
-          echo "  Password: $SSH_PASSWORD"
-          echo ""
-          echo "VNC Access:"
-          echo "  VNC Server: $TAILSCALE_IP:5901"
-          echo "  Password: $VNC_PASSWORD"
-          echo "  (Use any VNC client like RealVNC, TightVNC, etc.)"
-          echo ""
-          echo "Desktop Environment: XFCE4"
-          echo "=========================="
-          echo ""
-          
-          # Keep runner active indefinitely (or until manually cancelled)
-          while true; do
-              echo "[$(date)] Linux Remote Access Active - Use Ctrl+C in workflow to terminate"
-              sleep 300
-          done
